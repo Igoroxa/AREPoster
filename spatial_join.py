@@ -2,70 +2,67 @@ import pandas as pd
 import geopandas as gpd
 from shapely.geometry import Point
 
-# ---------------------------
+# --------------------------------------------
 # STEP 1: Load your earthquake data
-# ---------------------------
+# --------------------------------------------
 print("Loading earthquake CSV...")
 df = pd.read_csv("usgs_quakes_full1.csv")
-
 print(f"Loaded {df.shape[0]} rows")
 
-# See the columns
-print("\nColumns in CSV:", df.columns.tolist())
-
-# Preview rows
-print(df.head())
-
-# ---------------------------
-# STEP 2: Make sure longitude and latitude are numeric
-# ---------------------------
+# Make sure longitude and latitude are numeric
 df['longitude'] = pd.to_numeric(df['longitude'], errors='coerce')
 df['latitude'] = pd.to_numeric(df['latitude'], errors='coerce')
-
-# Drop any rows with missing or invalid coordinates
 df = df.dropna(subset=['longitude', 'latitude'])
 
-print(f"Rows after dropping bad coordinates: {df.shape[0]}")
+print(f"Rows after dropping invalid coordinates: {df.shape[0]}")
 
-# ---------------------------
-# STEP 3: Convert earthquakes to GeoDataFrame
-# ---------------------------
-print("Converting to GeoDataFrame...")
+# Convert to GeoDataFrame
 gdf_quakes = gpd.GeoDataFrame(
     df,
     geometry=gpd.points_from_xy(df['longitude'], df['latitude']),
     crs="EPSG:4326"
 )
+print("✅ Earthquake GeoDataFrame created.")
 
-print(gdf_quakes.head())
-
-# ---------------------------
-# STEP 4: Load PB2002 boundaries shapefile
-# ---------------------------
+# --------------------------------------------
+# STEP 2: Load PB2002 boundaries shapefile
+# --------------------------------------------
 print("Loading PB2002 boundaries shapefile...")
 plates = gpd.read_file("PB2002/PB2002_boundaries.shp")
-print(plates.head())
-
 print("Columns:", plates.columns)
-print("Boundary types:", plates['Type'].unique())
 
+# Filter for subduction only
 subduction = plates[plates['Type'].str.lower() == 'subduction']
+print(f"Number of subduction lines: {len(subduction)}")
 
+# --------------------------------------------
+# STEP 3: Buffer the subduction lines to make them areas
+# --------------------------------------------
+# Buffer distance in degrees — adjust for your resolution!
+BUFFER_DEGREES = 0.5
 
-print(f"Subduction boundaries: {len(subduction)}")
+# Reproject if needed (should already be EPSG:4326)
+subduction = subduction.to_crs(gdf_quakes.crs)
 
-# ---------------------------
-# STEP 6: Flag earthquakes inside subduction zones
-# ---------------------------
-print("Running point-in-polygon test...")
-gdf_quakes['subduction_flag'] = gdf_quakes.geometry.within(subduction.unary_union).astype(int)
+# Create buffered polygons around lines
+subduction_buffered = subduction.buffer(BUFFER_DEGREES)
+print(f"Buffered subduction zones created with {BUFFER_DEGREES} degree buffer.")
 
-print(gdf_quakes[['latitude', 'longitude', 'subduction_flag']].head())
+# Union all buffered polygons into one big MultiPolygon
+subduction_union = subduction_buffered.unary_union
 
-# ---------------------------
-# STEP 7: Save final labeled CSV
-# ---------------------------
-# Add your time features if they’re not already there:
+# --------------------------------------------
+# STEP 4: Flag earthquakes inside buffered subduction zones
+# --------------------------------------------
+print("Running point-in-polygon test using buffer...")
+gdf_quakes['subduction_flag'] = gdf_quakes.geometry.within(subduction_union).astype(int)
+
+print("\nValue counts for subduction_flag:")
+print(gdf_quakes['subduction_flag'].value_counts())
+
+# --------------------------------------------
+# STEP 5: Add time features and save final dataset
+# --------------------------------------------
 gdf_quakes['time'] = pd.to_datetime(gdf_quakes['time'])
 gdf_quakes['year'] = gdf_quakes['time'].dt.year
 gdf_quakes['month'] = gdf_quakes['time'].dt.month
@@ -76,6 +73,6 @@ cols_to_save = [
     'year', 'month', 'day_of_year', 'subduction_flag'
 ]
 
-print("Saving earthquakes_subduction.csv...")
+# Save it!
 gdf_quakes[cols_to_save].to_csv("earthquakes_subduction.csv", index=False)
 print("✅ Done! Final labeled file saved as earthquakes_subduction.csv.")
